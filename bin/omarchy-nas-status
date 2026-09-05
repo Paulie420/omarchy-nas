@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# omarchy-nas-status — everything the NAS panel displays, as one JSON blob.
+# Unprivileged. Every NFS-touching call is bounded; the bar must never block.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/nas-common.sh"
+
+STATE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/state/nas-shares.json"
+
+# Source of truth for "my shares": the state file. Seeded on first run from
+# whatever is mounted, so an existing setup adopts itself.
+if [[ -r $STATE ]]; then
+  mapfile -t SHARES < <(jq -r '.[]' "$STATE" 2>/dev/null)
+else
+  mapfile -t SHARES < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null |
+    awk -v b="$NAS_EXPORT_BASE/" '$2 ~ b {sub(".*"b,"",$2); print $2}' | sort -u)
+fi
+
+# findmnt reads /proc/self/mountinfo — no stat(), so a dead server cannot hang.
+is_mounted() { findmnt -rn "$1" >/dev/null 2>&1; }
+
+# df DOES stat(). Bound it and degrade to null rather than freeze the panel.
+free_of() {
+  local out
+  out=$(timeout 2 df -h --output=avail "$1" 2>/dev/null | tail -1 | tr -d ' ')
+  [[ -n $out ]] && printf '%s' "$out" || printf 'null_marker'
+}
+
+nc -z -w1 "$NAS_HOST" 2049 >/dev/null 2>&1 && reachable=true || reachable=false
+
+pv_up=false; pv_hs=false
+if [[ -d /sys/class/net/pivpn ]]; then
+  pv_up=true
+  [[ $(cat /sys/class/net/pivpn/statistics/rx_bytes 2>/dev/null || echo 0) -gt 0 ]] && pv_hs=true
+fi
+
+# The route names the real egress interface. "Reachable without the tunnel" is
+# not testable while the tunnel is up, so the route is the authority.
+transport=none
+if [[ $reachable == true ]]; then
+  if ip route get "$NAS_HOST" 2>/dev/null | grep -qw pivpn; then transport=pivpn; else transport=lan; fi
+fi
+
+shares_json='[]'
+for n in "${SHARES[@]:-}"; do
+  [[ -n $n ]] || continue
+  nas_valid_name "$n" || continue
+  t=$(nas_target "$n")
+  m=false; f=null_marker
+  if is_mounted "$t"; then m=true; f=$(free_of "$t"); fi
+  shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --arg f "$f" \
+    '. += [{name:$n,target:$t,mounted:$m,free:(if $f=="null_marker" then null else $f end)}]' <<<"$shares_json")
+done
+
+# showmount can stall when the NAS is gone; an empty list collapses the
+# "Available" section quietly rather than raising an error.
+avail_json='[]'
+if [[ $reachable == true ]]; then
+  avail_json=$(timeout 6 showmount -e "$NAS_HOST" 2>/dev/null |
+    awk -v b="$NAS_EXPORT_BASE/" '$1 ~ "^"b {sub("^"b,"",$1); print $1}' |
+    jq -R . | jq -sc "map(select(. as \$x | $(jq -c . <<<"$shares_json") | map(.name) | index(\$x) | not))") || avail_json='[]'
+  [[ -z $avail_json || $avail_json == "null" ]] && avail_json='[]'
+fi
+
+jq -nc --argjson reachable "$reachable" --arg transport "$transport" \
+  --argjson up "$pv_up" --argjson hs "$pv_hs" \
+  --argjson shares "$shares_json" --argjson available "$avail_json" \
+  '{reachable:$reachable,transport:$transport,pivpn:{up:$up,handshake:$hs},shares:$shares,available:$available}'
