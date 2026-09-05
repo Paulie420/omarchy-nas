@@ -56,8 +56,8 @@ done
 # df exits 1 if ANY target is bad but still prints the good rows.
 if [[ ${#mounted_targets[@]} -gt 0 ]]; then
   while IFS=$'\t' read -r target avail; do
-    # Skip header line (contains "Mounted on" etc)
-    [[ $target == "Mounted on" ]] && continue
+    # Skip header line by checking if target starts with /
+    [[ $target == /* ]] || continue
     target_free["$target"]="$avail"
   done < <(timeout 3 df -h --output=target,avail "${mounted_targets[@]}" 2>/dev/null | tr -s ' ' '\t')
 fi
