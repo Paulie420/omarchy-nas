@@ -17,7 +17,7 @@
 - Panel content uses `KeyboardPanel` > `PanelKeyCatcher` > `Flickable` > `Column`. Do NOT declare a `PanelController` (Ui/Panel.qml already owns one) and do NOT use QtQuick.Layouts — the house pattern is plain `Column`/`Row`.
 - `ConfirmDialog` API is `opened` (bool), `message`, `confirmText`/`cancelText`, signals `confirmed()`/`canceled()`. There is no `title`, `open()` or `onAccepted`.
 - Never use `mountpoint` or bare `df` on the paint path — they `stat()` and hang for the full NFS timeout. Use `findmnt` (reads `/proc/self/mountinfo`) and `timeout 2 df`.
-- Share names must match `^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$`. Reject everything else before use.
+- Share names must match `^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$`. Reject everything else before use.
 - `omarchy-nas-mountctl` constructs source and target; it never accepts a path from the caller.
 - Local target for name `a/b` is `/mnt/a-b`. Both scripts derive this via the shared `nas_target()` function — never reimplemented.
 - QML `Process.command` is an **array** (no shell interpolation).
@@ -82,7 +82,7 @@ NAS_MOUNT_ROOT="${NAS_MOUNT_ROOT:-/mnt}"
 # paths, no whitespace, no shell metacharacters. Anchored at both ends.
 nas_valid_name() {
   [[ $# -eq 1 ]] || return 1
-  [[ $1 =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$ ]] || return 1
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$ ]] || return 1
   # ".." is spelled with legal characters, so exclude it explicitly.
   local part
   for part in ${1//\// }; do
