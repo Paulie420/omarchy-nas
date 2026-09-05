@@ -18,13 +18,6 @@ fi
 # findmnt reads /proc/self/mountinfo — no stat(), so a dead server cannot hang.
 is_mounted() { findmnt -rn "$1" >/dev/null 2>&1; }
 
-# df DOES stat(). Bound it and degrade to null rather than freeze the panel.
-free_of() {
-  local out
-  out=$(timeout 2 df -h --output=avail "$1" 2>/dev/null | tail -1 | tr -d ' ')
-  [[ -n $out ]] && printf '%s' "$out" || printf 'null_marker'
-}
-
 nc -z -w1 "$NAS_HOST" 2049 >/dev/null 2>&1 && reachable=true || reachable=false
 
 pv_up=false; pv_hs=false
@@ -40,16 +33,48 @@ if [[ $reachable == true ]]; then
   if ip route get "$NAS_HOST" 2>/dev/null | grep -qw pivpn; then transport=pivpn; else transport=lan; fi
 fi
 
+# Build the list of shares, identifying which are mounted. Use ONE df call to get
+# free space for all mounted targets at once — this bounds total time regardless
+# of share count.
 shares_json='[]'
+declare -A target_free
+declare -a mounted_targets=()
+
 for n in "${SHARES[@]:-}"; do
   [[ -n $n ]] || continue
   nas_valid_name "$n" || continue
   t=$(nas_target "$n")
-  m=false; f=null_marker
-  if is_mounted "$t"; then m=true; f=$(free_of "$t"); fi
-  shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --arg f "$f" \
-    '. += [{name:$n,target:$t,mounted:$m,free:(if $f=="null_marker" then null else $f end)}]' <<<"$shares_json")
+  if is_mounted "$t"; then
+    mounted_targets+=("$t")
+  fi
 done
+
+# Query free space for all mounted targets in one call, bounded to 3 seconds.
+# df exits 1 if ANY target is bad but still prints the good rows.
+if [[ ${#mounted_targets[@]} -gt 0 ]]; then
+  while IFS=$'\t' read -r target avail; do
+    # Skip header line (contains "Mounted on" etc)
+    [[ $target == "Mounted on" ]] && continue
+    target_free["$target"]="$avail"
+  done < <(timeout 3 df -h --output=target,avail "${mounted_targets[@]}" 2>/dev/null | tr -s ' ' '\t')
+fi
+
+# Rebuild shares_json with free space from the single df call.
+for n in "${SHARES[@]:-}"; do
+  [[ -n $n ]] || continue
+  nas_valid_name "$n" || continue
+  t=$(nas_target "$n")
+  m=false; f=null
+  if [[ -v target_free["$t"] ]]; then
+    m=true
+    f="${target_free[$t]}"
+  fi
+  shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --arg f "$f" \
+    '. += [{name:$n,target:$t,mounted:$m,free:$f}]' <<<"$shares_json")
+done
+
+# Guard the accumulator — if any jq failed, reset to empty array.
+[[ -z $shares_json || $shares_json == "null" ]] && shares_json='[]'
 
 # showmount can stall when the NAS is gone; an empty list collapses the
 # "Available" section quietly rather than raising an error.
