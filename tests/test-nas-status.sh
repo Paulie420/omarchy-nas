@@ -24,5 +24,15 @@ echo "$out" | jq -e '.pivpn.handshake|type=="boolean"' >/dev/null && ok "pivpn.h
 echo "$out" | jq -e '.shares[]|has("name")' >/dev/null && ok "shares[].name present" || bad "shares[].name missing"
 echo "$out" | jq -e '.shares[]|has("target")' >/dev/null && ok "shares[].target present" || bad "shares[].target missing"
 echo "$out" | jq -e '.shares[]|has("mounted")' >/dev/null && ok "shares[].mounted present" || bad "shares[].mounted missing"
-echo "$out" | jq -e '.shares[]|.free|type=="null" or type=="string"' >/dev/null && ok "shares[].free null-or-string" || bad "shares[].free bad type"
+echo "$out" | jq -e '.shares[]|.free==null or (.free|type=="string" and . != "null")' >/dev/null && ok "shares[].free null-or-string (not literal null)" || bad "shares[].free is literal string \"null\" or wrong type"
+
+# Test with unmounted shares (df timeout simulation): when no shares are mounted,
+# free should be JSON null, not the string "null".
+TEST_DIR=$(mktemp -d)
+mkdir -p "$TEST_DIR/omarchy/state"
+echo '["extra"]' > "$TEST_DIR/omarchy/state/nas-shares.json"
+test_out=$(XDG_CONFIG_HOME="$TEST_DIR" "$BIN" 2>/dev/null)
+echo "$test_out" | jq -e '.shares[0].free == null' >/dev/null && ok "unmounted share free is JSON null" || bad "unmounted share free is not JSON null: $(echo "$test_out" | jq -c '[.shares[].free]')"
+rm -rf "$TEST_DIR"
+
 exit $fail

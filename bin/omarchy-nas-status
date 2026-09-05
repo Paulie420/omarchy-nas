@@ -35,9 +35,11 @@ fi
 
 # Build the list of shares, identifying which are mounted. Use ONE df call to get
 # free space for all mounted targets at once — this bounds total time regardless
-# of share count.
+# of share count. Track mount status from findmnt (never df) to ensure mounted:true
+# survives a df timeout.
 shares_json='[]'
 declare -A target_free
+declare -A target_mounted
 declare -a mounted_targets=()
 
 for n in "${SHARES[@]:-}"; do
@@ -46,6 +48,7 @@ for n in "${SHARES[@]:-}"; do
   t=$(nas_target "$n")
   if is_mounted "$t"; then
     mounted_targets+=("$t")
+    target_mounted["$t"]=true
   fi
 done
 
@@ -59,18 +62,21 @@ if [[ ${#mounted_targets[@]} -gt 0 ]]; then
   done < <(timeout 3 df -h --output=target,avail "${mounted_targets[@]}" 2>/dev/null | tr -s ' ' '\t')
 fi
 
-# Rebuild shares_json with free space from the single df call.
+# Rebuild shares_json with mount status from findmnt and free space from df.
+# mounted comes from is_mounted() (findmnt) — df timeout must not flip it.
 for n in "${SHARES[@]:-}"; do
   [[ -n $n ]] || continue
   nas_valid_name "$n" || continue
   t=$(nas_target "$n")
-  m=false; f=null
+  m=${target_mounted[$t]:-false}
+  # Emit free space: either the df result (a string) or JSON null if not found.
   if [[ -v target_free["$t"] ]]; then
-    m=true
-    f="${target_free[$t]}"
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --arg f "${target_free[$t]}" \
+      '. += [{name:$n,target:$t,mounted:$m,free:$f}]' <<<"$shares_json")
+  else
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" \
+      '. += [{name:$n,target:$t,mounted:$m,free:null}]' <<<"$shares_json")
   fi
-  shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --arg f "$f" \
-    '. += [{name:$n,target:$t,mounted:$m,free:$f}]' <<<"$shares_json")
 done
 
 # Guard the accumulator — if any jq failed, reset to empty array.
