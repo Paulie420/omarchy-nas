@@ -16,23 +16,32 @@ Your live NAS mounts are untouched, and `extra` is still unmounted as reserved.
 | Task | State | Commits |
 |---|---|---|
 | 1 — `lib/nas-common.sh` (name validation + path derivation) | **complete, review clean** | `71db185..b5ce423` |
-| 2 — `bin/omarchy-nas-status` (JSON state) | **fix round 3 of 5 IN FLIGHT** | `cae22e8..954c041` + uncommitted |
+| 2 — `bin/omarchy-nas-status` (JSON state) | **code complete; re-review of round 3 still owed** | `cae22e8..7cfb2df` |
 
 Both test suites pass right now:
 `bash tests/test-nas-common.sh` and `bash tests/test-nas-status.sh`.
 
-### ⚠️ Uncommitted work in the tree
+### Tree is CLEAN — round 3 landed
 
-`bin/omarchy-nas-status` and `tests/test-nas-status.sh` are modified but NOT
-committed — a fix-round-3 subagent was still working when we stopped. Tests pass
-with these changes present, but I did not verify the round is complete, so I did
-not commit it under a "fix:" message that might be a lie.
+Fix round 3 committed as `7cfb2df` (after this doc was first written; this
+section supersedes the earlier "uncommitted work" warning). Nothing is pending.
+Task 2 is now **complete pending its scoped re-review**, which was NOT run
+before we paused.
 
-**First action next session:** `git diff` and decide — commit if round 3 looks
-finished, `git checkout --` those two files to fall back to `954c041` if not.
-Either is safe; `954c041` is a good state.
+- Item A done: the df-timeout test is real. It shims `df` with a 30s hang and
+  asserts `mounted=4 preserved` and `all mounted .free is null`.
+  Can-it-fail evidence supplied: with `mounted` reverted to derive from `df`,
+  the test fails with `FAIL df-timeout: mounted=0 but expected 4`.
+- Item B done: header skip is now `[[ $target == /* ]] || continue`
+  (bin/omarchy-nas-status:60).
+- 23 assertions pass in ~4s; both suites green; 4 mounted shares with real free
+  values, `extra` still unmounted.
 
-## What round 3 was doing
+**First action next session:** run the scoped re-review of `954c041..7cfb2df`
+to close Task 2 properly, then start Task 3. Do not skip it — every prior
+round of this task introduced something the previous round's tests missed.
+
+## What round 3 did (for the re-review to verify)
 
 Two items, both small:
 
