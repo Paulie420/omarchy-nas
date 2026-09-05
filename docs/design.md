@@ -137,9 +137,25 @@ the tunnel hangs rather than fails.
 success append to the plugin's `shares` setting so it persists. `extra` is
 the reserved end-to-end test for this flow.
 
-## Settings schema
+## Settings and persistence
 
-    shares              array of names, default the current four
+**Correction found during planning:** plugin settings are READ-ONLY. `Panel.qml:39`
+exposes `setting(name, fallback)` and values flow one way out of `shell.json`
+via `Bar.qml:1790 entrySettings()`. There is no plugin-facing write API, so
+"remember the share I just added" cannot live in plugin settings.
+
+Added shares therefore persist to a state file the plugin owns:
+
+    ~/.config/omarchy/state/nas-shares.json     ["Backup4TB", "Backup6TB", ...]
+
+This is an unprivileged write to `$HOME` — adding a share and mounting it are
+two separate operations, and only the mount needs `pkexec`. The file is the
+source of truth for "my shares"; it is seeded on first run from the
+`shares` setting if present, else from whatever is mounted at that moment.
+
+Read-only settings (`shell.json`, optional):
+
+    shares              seed list, used only when the state file is absent
     nasHost             default "10.0.0.118"
     exportBase          default "/mnt/SpeakerOffice"
     mountRoot           default "/mnt"
