@@ -45,6 +45,27 @@ is_mounted() { findmnt -rn "$1" >/dev/null 2>&1; }
 
 nc -z -w1 "$NAS_HOST" 2049 >/dev/null 2>&1 && reachable=true || reachable=false
 
+# --probe: the cheap subset the bar icon needs to colour itself, and nothing
+# else. findmnt reads /proc (no network at all) and the reachability test above
+# is a single TCP SYN, so this is safe to run on a timer with the panel closed.
+# It deliberately skips `df` and `showmount`, which are the parts that actually
+# talk to the NAS and cost real time.
+if [[ ${1:-} == --probe ]]; then
+  probe_mounted=0
+  if ((${#SHARES[@]})); then
+    for n in "${SHARES[@]}"; do
+      [[ -n $n ]] || continue
+      nas_valid_name "$n" || continue
+      is_mounted "$(nas_target "$n")" && probe_mounted=$((probe_mounted + 1))
+    done
+  fi
+  jq -nc --argjson reachable "$reachable" \
+         --argjson mounted "$probe_mounted" \
+         --argjson total "${#SHARES[@]}" \
+         '{reachable:$reachable,mounted:$mounted,total:$total}'
+  exit 0
+fi
+
 pv_up=false; pv_hs=false
 if [[ -d /sys/class/net/pivpn ]]; then
   pv_up=true

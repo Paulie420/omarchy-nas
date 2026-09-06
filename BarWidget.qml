@@ -42,6 +42,52 @@ Panel {
     onTriggered: nas.refresh()
   }
 
+  // --- cheap probe, for the bar icon's colour while the panel is closed -----
+  // The full status poll only runs at startup and while the panel is open, so
+  // without this the icon's colour would go stale the moment you closed it.
+  // --probe skips df and showmount: it is findmnt (reads /proc) plus a single
+  // TCP SYN, ~80ms, so a 30s timer costs effectively nothing.
+  property int probeMounted: 0
+  property int probeTotal: 0
+  property bool probeReachable: false
+
+  Timer {
+    interval: 30000
+    running: true
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: if (!probeProc.running) probeProc.running = true
+  }
+
+  property Process probeProc: Process {
+    command: ["/usr/local/bin/omarchy-nas-status", "--probe"]
+    running: false
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(this.text)
+          // Guard the shape: an installed helper older than --probe ignores the
+          // flag and returns the FULL status object, which has `reachable` but
+          // no `mounted`/`total`. Accepting that would leave the counts
+          // undefined and colour the icon by accident. Keep the last good
+          // reading until the helper is actually updated.
+          if (typeof d.mounted !== "number" || typeof d.total !== "number") return
+          root.probeReachable = !!d.reachable
+          root.probeMounted = d.mounted
+          root.probeTotal = d.total
+        } catch (e) {
+          // Keep the last good reading rather than flashing the icon to a
+          // state that may not be true.
+        }
+      }
+    }
+  }
+
+  // While the panel is open the full poll is fresher, so prefer it.
+  readonly property bool liveReachable: root.opened ? nas.reachable : root.probeReachable
+  readonly property int  liveMounted:   root.opened ? nas.mountedCount : root.probeMounted
+  readonly property int  liveTotal:     root.opened ? nas.totalCount : root.probeTotal
+
   MountController {
     id: ctl
     onFinished: function (ok, message) { nas.lastError = ok ? "" : message; nas.refresh() }
@@ -59,10 +105,18 @@ Panel {
     // bar icon and threw the row's spacing out; the count belongs in the panel,
     // which is one click away.
     text: "󰋊"
-    // Dimmed when the homelab is unreachable. This reflects the LAST completed
-    // status poll (startup, and whenever the panel is open) -- there is no
-    // background polling any more, so it can lag until the panel is opened.
-    foreground: nas.reachable ? root.foreground : Qt.darker(root.foreground, 1.9)
+    // Four states, at a glance:
+    //   grey   homelab not reachable -- mounting is not even possible
+    //   red    reachable but NOTHING mounted
+    //   amber  reachable, some mounted
+    //   green  reachable, everything mounted
+    // Grey is deliberately not red: being away from home is normal, whereas
+    // "the NAS is right there and nothing is mounted" is the actionable one.
+    foreground: !root.liveReachable ? Qt.darker(root.foreground, 2.0)
+              : root.liveTotal === 0 ? root.foreground
+              : root.liveMounted === 0 ? Color.urgent
+              : root.liveMounted < root.liveTotal ? root.staleColor
+              : root.okColor
     useActiveColor: false
     slotSize: Style.bar.statusSlot
     fontSize: Style.bar.iconFont
