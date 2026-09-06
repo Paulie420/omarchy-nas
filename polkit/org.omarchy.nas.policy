@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>paulie420.nas</vendor>
+  <vendor_url>https://github.com/Paulie420</vendor_url>
+
+  <action id="org.omarchy.nas.manage-mounts">
+    <description>Mount and unmount SpeakerOffice NAS shares</description>
+    <message>Authentication is required to change NAS mounts</message>
+
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <!--
+        auth_admin_keep: prompt, then cache briefly, so mounting one share and
+        immediately unmounting another does not ask twice.
+
+        /etc/pam.d/polkit-1 on this machine has `auth sufficient pam_fprintd.so`
+        BEFORE `auth required pam_unix.so`, so this single prompt accepts a
+        fingerprint OR a typed password with nothing extra to configure:
+        a successful touch short-circuits, anything else falls through to the
+        password field.
+      -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+
+    <!--
+      pkexec matches this path EXACTLY against argv[0] as resolved. It must be
+      the installed absolute path, and the binary must be root-owned and not
+      group/world writable or pkexec refuses to run it.
+    -->
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/omarchy-nas-mountctl</annotate>
+
+    <!--
+      Retains $DISPLAY/$XAUTHORITY only. pkexec still resets the rest of the
+      environment to a minimal safe set, which is one of the two reasons
+      omarchy-nas-mountctl pins NAS_HOST/NAS_EXPORT_BASE/NAS_MOUNT_ROOT to
+      literals; the other is that `sudo -E` does not scrub anything.
+    -->
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

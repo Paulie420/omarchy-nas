@@ -13,8 +13,11 @@
 ## Global Constraints
 
 - NAS host `10.0.0.118`, export base `/mnt/SpeakerOffice`, mount root `/mnt`.
+- qs.Commons exposes `Color.urgent`; there is NO `Color.warning`.
+- Panel content uses `KeyboardPanel` > `PanelKeyCatcher` > `Flickable` > `Column`. Do NOT declare a `PanelController` (Ui/Panel.qml already owns one) and do NOT use QtQuick.Layouts — the house pattern is plain `Column`/`Row`.
+- `ConfirmDialog` API is `opened` (bool), `message`, `confirmText`/`cancelText`, signals `confirmed()`/`canceled()`. There is no `title`, `open()` or `onAccepted`.
 - Never use `mountpoint` or bare `df` on the paint path — they `stat()` and hang for the full NFS timeout. Use `findmnt` (reads `/proc/self/mountinfo`) and `timeout 2 df`.
-- Share names must match `^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$`. Reject everything else before use.
+- Share names must match `^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$`. Reject everything else before use.
 - `omarchy-nas-mountctl` constructs source and target; it never accepts a path from the caller.
 - Local target for name `a/b` is `/mnt/a-b`. Both scripts derive this via the shared `nas_target()` function — never reimplemented.
 - QML `Process.command` is an **array** (no shell interpolation).
@@ -79,7 +82,7 @@ NAS_MOUNT_ROOT="${NAS_MOUNT_ROOT:-/mnt}"
 # paths, no whitespace, no shell metacharacters. Anchored at both ends.
 nas_valid_name() {
   [[ $# -eq 1 ]] || return 1
-  [[ $1 =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$ ]] || return 1
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$ ]] || return 1
   # ".." is spelled with legal characters, so exclude it explicitly.
   local part
   for part in ${1//\// }; do
@@ -620,7 +623,7 @@ and change the button to show the count:
   BarIconButton {
     id: button
     text: nas.totalCount > 0 ? "󰋊 " + nas.mountedCount + "/" + nas.totalCount : "󰋊"
-    color: nas.mountedCount === nas.totalCount ? root.foreground : Color.warning
+    color: nas.mountedCount === nas.totalCount ? root.foreground : Color.urgent
     onClicked: root.toggle()
   }
 ```
@@ -712,7 +715,7 @@ QtObject {
 
 - [ ] **Step 2: Build the panel body**
 
-Inside `Panel { ... }`, add:
+Follow the working `paulie420.vpn` structure exactly. Add inside `Panel { ... }`:
 
 ```qml
   MountController {
@@ -720,50 +723,86 @@ Inside `Panel { ... }`, add:
     onFinished: function(ok, message) { nas.lastError = ok ? "" : message; nas.refresh() }
   }
 
-  PanelController {
-    ColumnLayout {
-      spacing: 6
+  // KeyboardPanel (extends PopupCard) is the content host. Ui/Panel.qml already
+  // owns a PanelController -- do NOT declare another. No QtQuick.Layouts here:
+  // the house pattern is plain Column/Row with explicit widths.
+  KeyboardPanel {
+    id: panel
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.opened
+    focusTarget: keyCatcher
+    contentWidth: panel.fittedContentWidth(Style.space(340))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
 
-      PanelSectionHeader {
-        text: "NAS"
-        // The route, not a guess: "reachable without the tunnel" is untestable
-        // while the tunnel is up.
-        subtitle: nas.transport === "lan" ? "via LAN"
-                : nas.transport === "pivpn" ? "via PiVPN" : "unreachable"
-      }
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      onCloseRequested: root.close()
+      onTabRequested: function (direction) { root.switchPanel(direction) }
 
-      Repeater {
-        model: nas.shares
-        delegate: RowLayout {
-          spacing: 8
-          Text { text: modelData.mounted ? "●" : "○"; color: root.foreground }
-          Text { text: modelData.name; color: root.foreground; Layout.fillWidth: true }
-          Text { text: modelData.free ? modelData.free : "—"; color: Qt.darker(root.foreground, 1.5) }
-          Button {
-            text: modelData.mounted ? "Unmount" : "Mount"
-            onClicked: modelData.mounted ? confirmOrUmount(modelData.name) : ctl.mount([modelData.name])
+      Flickable {
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+
+        Column {
+          id: column
+          width: parent.width
+          spacing: Style.space(8)
+
+          Text {
+            text: nas.transport === "lan" ? "NAS - via LAN"
+                : nas.transport === "pivpn" ? "NAS - via PiVPN" : "NAS - unreachable"
+            color: root.foreground
+            font.pixelSize: Style.font.caption
           }
+
+          Repeater {
+            model: nas.shares
+            delegate: Row {
+              width: column.width
+              spacing: Style.space(8)
+              Text { text: modelData.mounted ? "\u25cf" : "\u25cb"; color: root.foreground }
+              Text { text: modelData.name; color: root.foreground; width: column.width * 0.4; elide: Text.ElideRight }
+              Text { text: modelData.free ? modelData.free : "\u2014"; color: Qt.darker(root.foreground, 1.5) }
+              Button {
+                text: modelData.mounted ? "Unmount" : "Mount"
+                onClicked: modelData.mounted ? root.confirmOrUmount(modelData.name) : ctl.mount([modelData.name])
+              }
+            }
+          }
+
+          Text {
+            text: "Available on NAS"
+            visible: nas.available.length > 0
+            color: Qt.darker(root.foreground, 1.4)
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: nas.available
+            delegate: Row {
+              width: column.width
+              spacing: Style.space(8)
+              Text { text: "+ " + modelData; color: root.foreground; width: column.width * 0.6; elide: Text.ElideRight }
+              Button { text: "Add"; onClicked: { ctl.addShare(modelData); ctl.mount([modelData]) } }
+            }
+          }
+
+          Row {
+            spacing: Style.space(8)
+            Button { text: "Mount all"; onClicked: ctl.mount(root.unmountedNames()) }
+            Button { text: "Open /mnt"; onClicked: Quickshell.execDetached(["uwsm-app", "--", "nautilus", "/mnt"]) }
+          }
+
+          Text { text: nas.lastError; color: Color.urgent; visible: nas.lastError !== "" }
         }
       }
-
-      PanelSeparator { visible: nas.available.length > 0 }
-      PanelSectionHeader { text: "Available on NAS"; visible: nas.available.length > 0 }
-
-      Repeater {
-        model: nas.available
-        delegate: RowLayout {
-          Text { text: "+ " + modelData; color: root.foreground; Layout.fillWidth: true }
-          Button { text: "Add"; onClicked: { ctl.addShare(modelData); ctl.mount([modelData]) } }
-        }
-      }
-
-      PanelSeparator {}
-      RowLayout {
-        Button { text: "Mount all"; onClicked: ctl.mount(unmountedNames()) }
-        Button { text: "Open /mnt"; onClicked: Quickshell.execDetached(["uwsm-app", "--", "nautilus", "/mnt"]) }
-      }
-
-      Text { text: nas.lastError; color: Color.urgent; visible: nas.lastError !== "" }
     }
   }
 
@@ -775,16 +814,18 @@ Inside `Panel { ... }`, add:
 
   // Over PiVPN a busy NFS umount hangs rather than fails, so make it deliberate.
   function confirmOrUmount(name) {
-    if (nas.transport === "pivpn") confirmDialog.ask(name)
+    if (nas.transport === "pivpn") { confirmDialog.pending = name; confirmDialog.opened = true }
     else ctl.umount([name])
   }
 
+  // Real ConfirmDialog API: `opened` bool, `message`, confirmed()/canceled().
   ConfirmDialog {
     id: confirmDialog
     property string pending: ""
-    function ask(n) { pending = n; title = "Unmount over PiVPN?";
-      message = "The tunnel is carrying this mount. If a transfer is running it will hang rather than fail."; open() }
-    onAccepted: ctl.umount([confirmDialog.pending])
+    message: "The PiVPN tunnel is carrying this mount. If a transfer is running it will hang rather than fail."
+    confirmText: "Unmount"
+    onConfirmed: { confirmDialog.opened = false; ctl.umount([confirmDialog.pending]) }
+    onCanceled: confirmDialog.opened = false
   }
 ```
 

@@ -80,7 +80,7 @@ The entire privileged surface. Two verbs, each taking a list so that
     omarchy-nas-mountctl mount  <name> [name...]
     omarchy-nas-mountctl umount <name> [name...]
 
-- Each name must match `^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$` — one optional
+- Each name must match `^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$` — one optional
   slash for nested exports such as `Backup4TB/ISOs`. Anything else is
   rejected before use. No `..`, no absolute paths, no shell interpolation of
   caller input.

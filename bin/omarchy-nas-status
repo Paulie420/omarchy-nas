@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# omarchy-nas-status — everything the NAS panel displays, as one JSON blob.
+# Unprivileged. Every NFS-touching call is bounded; the bar must never block.
+set -uo pipefail
+# Look for the shared lib next to the repo checkout first (so the test suite
+# runs without installing), then at the installed location. Installed at
+# /usr/local/bin, the repo-relative path resolves to /usr/local/lib/nas-common.sh
+# which is NOT where install.sh puts it -- hence two candidates, not one.
+for _c in "$(dirname "$(readlink -f "$0")")/../lib/nas-common.sh" \
+          /usr/local/lib/omarchy-nas/nas-common.sh; do
+  [[ -r $_c ]] && { . "$_c"; break; }
+done
+unset _c
+
+STATE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/state/nas-shares.json"
+
+# Source of truth for "my shares": the state file. Seeded on first run from
+# whatever is mounted, so an existing setup adopts itself.
+#
+# The seed is PERSISTED immediately, and that matters: without it the list is
+# recomputed from the mount table on every run, so unmounting a share would
+# erase it from the widget and leave no way to mount it back. A share list has
+# to outlive the mounts it describes.
+#
+# Only a well-formed JSON array counts as a state file. A hand-edited object or
+# a truncated write falls back to re-seeding rather than producing phantom
+# shares out of its values.
+if [[ -r $STATE ]] && jq -e 'type == "array"' "$STATE" >/dev/null 2>&1; then
+  mapfile -t SHARES < <(jq -r '.[]' "$STATE" 2>/dev/null)
+else
+  mapfile -t SHARES < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null |
+    awk -v b="$NAS_EXPORT_BASE/" '$2 ~ b {sub(".*"b,"",$2); print $2}' | sort -u)
+
+  # Write the seed through a temp file so a crash mid-write cannot leave a
+  # half-written state file that the guard above would then reject.
+  if ((${#SHARES[@]})); then
+    mkdir -p "$(dirname "$STATE")" 2>/dev/null &&
+      printf '%s\n' "${SHARES[@]}" | jq -R . | jq -s . > "$STATE.tmp" 2>/dev/null &&
+      mv "$STATE.tmp" "$STATE" 2>/dev/null || true
+  fi
+fi
+
+# findmnt reads /proc/self/mountinfo — no stat(), so a dead server cannot hang.
+is_mounted() { findmnt -rn "$1" >/dev/null 2>&1; }
+
+nc -z -w1 "$NAS_HOST" 2049 >/dev/null 2>&1 && reachable=true || reachable=false
+
+# --probe: the cheap subset the bar icon needs to colour itself, and nothing
+# else. findmnt reads /proc (no network at all) and the reachability test above
+# is a single TCP SYN, so this is safe to run on a timer with the panel closed.
+# It deliberately skips `df` and `showmount`, which are the parts that actually
+# talk to the NAS and cost real time.
+if [[ ${1:-} == --probe ]]; then
+  probe_mounted=0
+  if ((${#SHARES[@]})); then
+    for n in "${SHARES[@]}"; do
+      [[ -n $n ]] || continue
+      nas_valid_name "$n" || continue
+      is_mounted "$(nas_target "$n")" && probe_mounted=$((probe_mounted + 1))
+    done
+  fi
+  jq -nc --argjson reachable "$reachable" \
+         --argjson mounted "$probe_mounted" \
+         --argjson total "${#SHARES[@]}" \
+         '{reachable:$reachable,mounted:$mounted,total:$total}'
+  exit 0
+fi
+
+pv_up=false; pv_hs=false
+if [[ -d /sys/class/net/pivpn ]]; then
+  pv_up=true
+  [[ $(cat /sys/class/net/pivpn/statistics/rx_bytes 2>/dev/null || echo 0) -gt 0 ]] && pv_hs=true
+fi
+
+# The route names the real egress interface. "Reachable without the tunnel" is
+# not testable while the tunnel is up, so the route is the authority.
+transport=none
+if [[ $reachable == true ]]; then
+  if ip route get "$NAS_HOST" 2>/dev/null | grep -qw pivpn; then transport=pivpn; else transport=lan; fi
+fi
+
+# Build the list of shares, identifying which are mounted. Use ONE df call to get
+# free space for all mounted targets at once — this bounds total time regardless
+# of share count. Track mount status from findmnt (never df) to ensure mounted:true
+# survives a df timeout.
+shares_json='[]'
+declare -A target_free
+declare -A target_mounted
+declare -a mounted_targets=()
+
+for n in "${SHARES[@]:-}"; do
+  [[ -n $n ]] || continue
+  nas_valid_name "$n" || continue
+  t=$(nas_target "$n")
+  if is_mounted "$t"; then
+    mounted_targets+=("$t")
+    target_mounted["$t"]=true
+  fi
+done
+
+# Query free space for all mounted targets in one call, bounded to 3 seconds.
+# df exits 1 if ANY target is bad but still prints the good rows.
+if [[ ${#mounted_targets[@]} -gt 0 ]]; then
+  while IFS=$'\t' read -r target avail; do
+    # Skip header line by checking if target starts with /
+    [[ $target == /* ]] || continue
+    target_free["$target"]="$avail"
+  done < <(timeout 3 df -h --output=target,avail "${mounted_targets[@]}" 2>/dev/null | tr -s ' ' '\t')
+fi
+
+# Rebuild shares_json with mount status from findmnt and free space from df.
+# mounted comes from is_mounted() (findmnt) — df timeout must not flip it.
+for n in "${SHARES[@]:-}"; do
+  [[ -n $n ]] || continue
+  nas_valid_name "$n" || continue
+  t=$(nas_target "$n")
+  m=${target_mounted[$t]:-false}
+  # STALE: still in the mount table, but the server is gone. Any read of this
+  # path blocks -- these are `hard` NFS mounts, so I/O retries forever rather
+  # than erroring. The panel needs to distinguish "mounted and usable" from
+  # "mounted and will hang your file manager".
+  st=false
+  [[ $m == true && $reachable == false ]] && st=true
+  # Emit free space: either the df result (a string) or JSON null if not found.
+  if [[ -v target_free["$t"] ]]; then
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" --arg f "${target_free[$t]}" \
+      '. += [{name:$n,target:$t,mounted:$m,free:$f,stale:$st}]' <<<"$shares_json")
+  else
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" \
+      '. += [{name:$n,target:$t,mounted:$m,free:null,stale:$st}]' <<<"$shares_json")
+  fi
+done
+
+# Guard the accumulator — if any jq failed, reset to empty array.
+[[ -z $shares_json || $shares_json == "null" ]] && shares_json='[]'
+
+# showmount can stall when the NAS is gone; an empty list collapses the
+# "Available" section quietly rather than raising an error.
+#
+# Two filters, not one:
+#   1. drop exports already in the share list (nothing to add)
+#   2. drop a NESTED export whose top-level parent is already a share --
+#      newBackupXTB/qbittorrent is reachable through /mnt/newBackupXTB the
+#      moment the parent is mounted, so offering it as a separate mount is
+#      noise. A nested export with no parent in the list is still offered,
+#      because that one genuinely is not reachable any other way.
+avail_json='[]'
+if [[ $reachable == true ]]; then
+  raw=$(timeout 6 showmount -e "$NAS_HOST" 2>/dev/null |
+    awk -v b="$NAS_EXPORT_BASE/" '$1 ~ "^"b {sub("^"b,"",$1); print $1}' |
+    jq -R . | jq -sc . 2>/dev/null) || raw='[]'
+  [[ -z $raw || $raw == "null" ]] && raw='[]'
+  avail_json=$(jq -nc --argjson raw "$raw" --argjson shares "$shares_json" '
+    ($shares | map(.name)) as $have
+    | $raw
+    | map(select(. as $x
+        | ($have | index($x) | not)
+        and ($have | index(($x | split("/")[0])) | not)))
+  ' 2>/dev/null) || avail_json='[]'
+  [[ -z $avail_json || $avail_json == "null" ]] && avail_json='[]'
+fi
+
+jq -nc --argjson reachable "$reachable" --arg transport "$transport" \
+  --argjson up "$pv_up" --argjson hs "$pv_hs" \
+  --argjson shares "$shares_json" --argjson available "$avail_json" \
+  '{reachable:$reachable,transport:$transport,pivpn:{up:$up,handshake:$hs},shares:$shares,available:$available}'

@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# omarchy-nas-mountctl — the ENTIRE privileged surface of paulie420.nas.
+# Runs as root via pkexec. Takes a verb and a list of share NAMES; never a
+# path. Source and target are constructed here, so a caller cannot point this
+# at anything outside the export base.
+set -uo pipefail
+# BASH_SOURCE[0], not $0: this file is also sourced by the test suite (to
+# exercise nas_prepare_target() directly without running the CLI body below),
+# and under `source` $0 is the caller's path, not this file's.
+# Two candidates: repo-relative (tests run uninstalled) then the installed
+# path. See install.sh -- /usr/local/bin/../lib is NOT where the lib lands.
+for _c in "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/nas-common.sh" \
+          /usr/local/lib/omarchy-nas/nas-common.sh; do
+  [[ -r $_c ]] && { . "$_c"; break; }
+done
+unset _c
+
+# CONTROLLER RULING: do NOT honour environment overrides of NAS_HOST,
+# NAS_EXPORT_BASE, or NAS_MOUNT_ROOT here. `man pkexec` confirms pkexec resets
+# to a minimal environment, so the pkexec path is already safe — but nothing
+# stops someone running `sudo -E omarchy-nas-mountctl`, where an inherited
+# NAS_MOUNT_ROOT=/etc would aim a root mount at /etc. Pin all three to their
+# literal values after sourcing lib/nas-common.sh so an inherited environment
+# can never redirect a ROOT mount. The unprivileged status script keeps its
+# overrides; this privileged one must not. Do not "helpfully" restore them.
+NAS_HOST=10.0.0.118
+NAS_EXPORT_BASE=/mnt/SpeakerOffice
+NAS_MOUNT_ROOT=/mnt
+
+die() { printf '%s\n' "$1" >&2; exit 1; }
+
+# Prepare $2 (the mount target) for a share named $1, refusing anything that
+# isn't a plain, genuinely-absent-or-already-a-directory path.
+#
+# `mkdir -p` FOLLOWS symlinks: if $tgt already existed as a symlink to some
+# other directory, `mkdir -p` would see "already a directory", do nothing,
+# and return success — then this script, running as root, would mount NFS
+# straight through that symlink onto wherever it points, silently defeating
+# the whole export-base confinement nas_valid_name() exists to enforce.
+# Do NOT restore `mkdir -p` here as a "simplification".
+#
+# The -L test MUST run before any -d/-e test: -d and -e stat() through a
+# symlink and would report on the link's target, not the link itself, which
+# is exactly the hole this function exists to close.
+nas_prepare_target() {
+  local n=$1 tgt=$2
+  if [[ -L $tgt ]]; then
+    echo "refusing: $n target is a symlink" >&2
+    return 1
+  fi
+  if [[ -e $tgt && ! -d $tgt ]]; then
+    echo "refusing: $n target exists and is not a directory" >&2
+    return 1
+  fi
+  if [[ ! -d $tgt ]] && ! mkdir "$tgt"; then
+    echo "mkdir failed: $n" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Everything below is the CLI body. Guarded so the test suite can source this
+# file (for nas_prepare_target above) without it consuming the test script's
+# arguments or calling exit/die.
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] || return 0
+
+verb="${1:-}"; shift || true
+[[ $verb == mount || $verb == umount || $verb == force-umount ]] || die "usage: omarchy-nas-mountctl mount|umount|force-umount <name>..."
+[[ $# -ge 1 ]] || die "no shares given"
+
+# Validate EVERY name before acting on ANY, so a bad argument late in the list
+# cannot leave the system half-changed.
+for n in "$@"; do
+  nas_valid_name "$n" || die "illegal share name: $n"
+done
+
+rc=0
+for n in "$@"; do
+  src=$(nas_source "$n"); tgt=$(nas_target "$n")
+  if [[ ${NAS_DRYRUN:-0} == 1 ]]; then
+    echo "would $verb $src -> $tgt"; continue
+  fi
+  case $verb in
+    mount)
+      findmnt -rn "$tgt" >/dev/null 2>&1 && continue      # already mounted
+      nas_prepare_target "$n" "$tgt" || { rc=1; continue; }
+      if ! timeout 15 mount -t nfs4 "$src" "$tgt" 2>/dev/null; then
+        echo "mount failed: $n" >&2; rc=1
+      fi
+      ;;
+    # Stale mount: the server is gone, so a plain umount would block on the
+    # unreachable NFS server for its full timeout. `umount -l` detaches the
+    # subtree from the namespace immediately WITHOUT waiting on the server,
+    # which is the only thing that reliably clears a hung `hard` NFS mount.
+    force-umount)
+      findmnt -rn "$tgt" >/dev/null 2>&1 || continue
+      if ! umount -l "$tgt" 2>/dev/null; then
+        echo "force-umount failed: $n" >&2; rc=1
+      fi
+      ;;
+
+    umount)
+      findmnt -rn "$tgt" >/dev/null 2>&1 || continue      # already gone
+      # Lazy on fallback: over PiVPN a busy NFS umount hangs rather than fails.
+      if ! timeout 10 umount "$tgt" 2>/dev/null && ! umount -l "$tgt" 2>/dev/null; then
+        echo "umount failed: $n" >&2; rc=1
+      fi
+      ;;
+  esac
+done
+exit $rc
