@@ -144,6 +144,12 @@ Panel {
       onTextKey: function (t) { if (t === "r" || t === "R") nas.refresh() }
 
       Flickable {
+        // Named, because children of a Flickable are reparented into its
+        // contentItem: `parent.width` inside the Column would resolve to
+        // contentItem.width, which is driven by contentWidth, which is driven
+        // by width -- a circular binding that collapses the panel to zero.
+        // paulie420.vpn references `flick.width` for exactly this reason.
+        id: flick
         anchors.fill: parent
         contentWidth: width
         contentHeight: column.implicitHeight
@@ -153,7 +159,7 @@ Panel {
 
         Column {
           id: column
-          width: parent.width
+          width: flick.width
           spacing: Style.space(8)
 
           Text {
