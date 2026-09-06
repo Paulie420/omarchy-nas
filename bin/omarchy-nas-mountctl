@@ -4,7 +4,10 @@
 # path. Source and target are constructed here, so a caller cannot point this
 # at anything outside the export base.
 set -uo pipefail
-. "$(dirname "$(readlink -f "$0")")/../lib/nas-common.sh"
+# BASH_SOURCE[0], not $0: this file is also sourced by the test suite (to
+# exercise nas_prepare_target() directly without running the CLI body below),
+# and under `source` $0 is the caller's path, not this file's.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/nas-common.sh"
 
 # CONTROLLER RULING: do NOT honour environment overrides of NAS_HOST,
 # NAS_EXPORT_BASE, or NAS_MOUNT_ROOT here. `man pkexec` confirms pkexec resets
@@ -19,6 +22,41 @@ NAS_EXPORT_BASE=/mnt/SpeakerOffice
 NAS_MOUNT_ROOT=/mnt
 
 die() { printf '%s\n' "$1" >&2; exit 1; }
+
+# Prepare $2 (the mount target) for a share named $1, refusing anything that
+# isn't a plain, genuinely-absent-or-already-a-directory path.
+#
+# `mkdir -p` FOLLOWS symlinks: if $tgt already existed as a symlink to some
+# other directory, `mkdir -p` would see "already a directory", do nothing,
+# and return success — then this script, running as root, would mount NFS
+# straight through that symlink onto wherever it points, silently defeating
+# the whole export-base confinement nas_valid_name() exists to enforce.
+# Do NOT restore `mkdir -p` here as a "simplification".
+#
+# The -L test MUST run before any -d/-e test: -d and -e stat() through a
+# symlink and would report on the link's target, not the link itself, which
+# is exactly the hole this function exists to close.
+nas_prepare_target() {
+  local n=$1 tgt=$2
+  if [[ -L $tgt ]]; then
+    echo "refusing: $n target is a symlink" >&2
+    return 1
+  fi
+  if [[ -e $tgt && ! -d $tgt ]]; then
+    echo "refusing: $n target exists and is not a directory" >&2
+    return 1
+  fi
+  if [[ ! -d $tgt ]] && ! mkdir "$tgt"; then
+    echo "mkdir failed: $n" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Everything below is the CLI body. Guarded so the test suite can source this
+# file (for nas_prepare_target above) without it consuming the test script's
+# arguments or calling exit/die.
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] || return 0
 
 verb="${1:-}"; shift || true
 [[ $verb == mount || $verb == umount ]] || die "usage: omarchy-nas-mountctl mount|umount <name>..."
@@ -39,7 +77,7 @@ for n in "$@"; do
   case $verb in
     mount)
       findmnt -rn "$tgt" >/dev/null 2>&1 && continue      # already mounted
-      mkdir -p "$tgt" || { echo "mkdir failed: $tgt" >&2; rc=1; continue; }
+      nas_prepare_target "$n" "$tgt" || { rc=1; continue; }
       if ! timeout 15 mount -t nfs4 "$src" "$tgt" 2>/dev/null; then
         echo "mount failed: $n" >&2; rc=1
       fi
