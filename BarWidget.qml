@@ -30,82 +30,22 @@ Panel {
     onFinished: function (ok, message) { nas.lastError = ok ? "" : message; nas.refresh() }
   }
 
-  // The full status helper touches the network (a reachability probe and,
-  // when reachable, showmount) so it only runs while the panel is open, as
-  // before. The names/targets it last reported are kept in `knownTargets`
-  // below for the cheap closed-panel probe to check against.
-  Timer {
-    interval: Math.max(5, root.setting("refreshIntervalSec", 10)) * 1000
-    running: root.opened
-    repeat: true
-    triggeredOnStart: true
-    onTriggered: nas.refresh()
-  }
-
-  // Share targets last seen from a full poll. Derives straight from
-  // nas.shares so it always tracks the latest known set with no extra state
-  // to keep in sync.
-  readonly property var knownTargets: {
-    var t = []
-    for (var i = 0; i < nas.shares.length; i++) t.push(nas.shares[i].target)
-    return t
-  }
-
-  // Mounted count as seen by the cheap, always-on probe below. Used for the
-  // icon only while the panel is closed -- while it's open, nas.mountedCount
-  // (from the real poll) takes precedence, per the last line of this block.
-  property int cheapMountedCount: 0
-
-  // At-a-glance status is the whole point of a bar icon: a closed panel that
-  // shows nothing until clicked defeats it. This timer runs unconditionally
-  // (not gated on root.opened) but only ever shells out to `findmnt`, which
-  // reads /proc/self/mountinfo -- no stat(), no network, never the full
-  // status helper. 45s keeps it well inside the brief's 30-60s band.
-  Timer {
-    interval: 45000
-    running: true
-    repeat: true
-    triggeredOnStart: true
-    onTriggered: if (!cheapProc.running) cheapProc.running = true
-  }
-
-  Process {
-    id: cheapProc
-    command: ["findmnt", "-rn", "-o", "TARGET"]
-    running: false
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var mounted = {}
-        var lines = this.text.split("\n")
-        for (var i = 0; i < lines.length; i++) {
-          var l = lines[i].trim()
-          if (l) mounted[l] = true
-        }
-        var kt = root.knownTargets
-        var n = 0
-        for (var j = 0; j < kt.length; j++) if (mounted[kt[j]]) n++
-        root.cheapMountedCount = n
-      }
-    }
-  }
-
-  // One full poll at startup. Without it `nas.totalCount` stays 0 until the
-  // panel is first opened, so the bar icon falls back to a bare glyph and the
-  // whole point of a live count is lost. Costs a single status call at login.
-  Component.onCompleted: nas.refresh()
-
-  readonly property int displayMounted: root.opened ? nas.mountedCount : root.cheapMountedCount
+  // No background polling. The cheap findmnt probe that used to run while the
+  // panel was closed existed solely to feed the bar count, and the count is
+  // gone -- so a closed panel now does literally nothing.
 
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: nas.totalCount > 0 ? "󰋊 " + root.displayMounted + "/" + nas.totalCount : "󰋊"
-    // Unreachable outranks "some unmounted": if the homelab is gone, the count
-    // is not the interesting fact. Dim rather than urgent-red, because being
-    // away from home is normal, not an error.
-    foreground: !nas.reachable ? Qt.darker(root.foreground, 1.9)
-              : (nas.totalCount > 0 && root.displayMounted < nas.totalCount ? Color.urgent : root.foreground)
+    // Glyph only. A "3/4" suffix made this slot far wider than every other
+    // bar icon and threw the row's spacing out; the count belongs in the panel,
+    // which is one click away.
+    text: "󰋊"
+    // Dimmed when the homelab is unreachable. This reflects the LAST completed
+    // status poll (startup, and whenever the panel is open) -- there is no
+    // background polling any more, so it can lag until the panel is opened.
+    foreground: nas.reachable ? root.foreground : Qt.darker(root.foreground, 1.9)
     useActiveColor: false
     slotSize: Style.bar.statusSlot
     fontSize: Style.bar.iconFont
