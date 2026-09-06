@@ -52,7 +52,10 @@ Panel {
   property bool probeReachable: false
 
   Timer {
-    interval: 30000
+    // 10s, not 30s: the probe costs ~80ms and this interval IS the lag before
+    // the bar icon catches up with reality after a mount, unmount or a tunnel
+    // going away. 30s was long enough to look broken.
+    interval: 10000
     running: true
     repeat: true
     triggeredOnStart: true
@@ -90,7 +93,13 @@ Panel {
 
   MountController {
     id: ctl
-    onFinished: function (ok, message) { nas.lastError = ok ? "" : message; nas.refresh() }
+    onFinished: function (ok, message) {
+      nas.lastError = ok ? "" : message
+      nas.refresh()
+      // Re-probe at once so the bar icon's colour changes with the click that
+      // caused it, instead of lagging up to a full timer interval behind.
+      if (!probeProc.running) probeProc.running = true
+    }
   }
 
   // No background polling. The cheap findmnt probe that used to run while the
