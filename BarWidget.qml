@@ -143,9 +143,15 @@ Panel {
     return out
   }
 
-  // Only unmounting over the tunnel needs a second press. On the LAN an
-  // unmount either works or fails fast, so a confirm there is pure friction.
-  readonly property bool needsConfirm: nas.transport === "pivpn"
+  // EVERY unmount arms first, on the LAN as well as over the tunnel, and the
+  // bulk button behaves exactly like a row. It was previously gated on
+  // transport === "pivpn", which made the same button confirm or not depending
+  // on where you happened to be -- inconsistent in the way that trains people
+  // to click twice by reflex, which defeats the confirm entirely.
+  //
+  // Mount is NOT gated: it is non-destructive, and nothing is lost by it
+  // happening on the first press.
+  readonly property bool needsConfirm: true
 
   // "" = nothing armed, "*" = the bulk action, otherwise a share name.
   property string armed: ""
