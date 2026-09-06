@@ -86,6 +86,7 @@ fi
 shares_json='[]'
 declare -A target_free
 declare -A target_size
+declare -A target_used
 declare -A target_mounted
 declare -a mounted_targets=()
 
@@ -102,12 +103,13 @@ done
 # Query free space for all mounted targets in one call, bounded to 3 seconds.
 # df exits 1 if ANY target is bad but still prints the good rows.
 if [[ ${#mounted_targets[@]} -gt 0 ]]; then
-  while IFS=$'\t' read -r target size avail; do
+  while IFS=$'\t' read -r target size used avail; do
     # Skip header line by checking if target starts with /
     [[ $target == /* ]] || continue
     target_free["$target"]="$avail"
     target_size["$target"]="$size"
-  done < <(timeout 3 df -h --output=target,size,avail "${mounted_targets[@]}" 2>/dev/null | tr -s ' ' '\t')
+    target_used["$target"]="$used"
+  done < <(timeout 3 df -h --output=target,size,used,avail "${mounted_targets[@]}" 2>/dev/null | tr -s ' ' '\t')
 fi
 
 # Rebuild shares_json with mount status from findmnt and free space from df.
@@ -125,11 +127,11 @@ for n in "${SHARES[@]:-}"; do
   [[ $m == true && $reachable == false ]] && st=true
   # Emit free space: either the df result (a string) or JSON null if not found.
   if [[ -v target_free["$t"] ]]; then
-    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" --arg sz "${target_size[$t]}" --arg f "${target_free[$t]}" \
-      '. += [{name:$n,target:$t,mounted:$m,size:$sz,free:$f,stale:$st}]' <<<"$shares_json")
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" --arg sz "${target_size[$t]}" --arg us "${target_used[$t]}" --arg f "${target_free[$t]}" \
+      '. += [{name:$n,target:$t,mounted:$m,size:$sz,used:$us,free:$f,stale:$st}]' <<<"$shares_json")
   else
     shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" \
-      '. += [{name:$n,target:$t,mounted:$m,size:null,free:null,stale:$st}]' <<<"$shares_json")
+      '. += [{name:$n,target:$t,mounted:$m,size:null,used:null,free:null,stale:$st}]' <<<"$shares_json")
   fi
 done
 

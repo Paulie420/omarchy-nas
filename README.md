@@ -21,8 +21,8 @@ Built for a NFS export layout where every share lives under one export base
 ## What it looks like
 
     ┌─ NAS ──────────────── via LAN ─┐
-    │ ● Backup4TB  4.5T / 573G  [⏏]  │
-    │ ● Backup6TB  5.5T / 439G  [⏏]  │
+    │ ● Backup4TB  4.0T / 4.5T  [⏏]  │
+    │ ● Backup6TB  5.1T / 5.5T  [⏏]  │
     │ ○ newBackupXTB      —     [↑]  │
     │── Available on NAS ────────────│
     │ + TimeMachine                  │
@@ -107,8 +107,8 @@ a server disappears, which would take the whole status bar down with it. So:
 
 - Mount state comes from `findmnt`, which reads `/proc/self/mountinfo`. Never
   `mountpoint`, which `stat()`s the path and hangs.
-- Capacity and free space come from a single `timeout 2 df` covering **all**
-  targets at once (`--output=target,size,avail`, so the second figure is free),
+- Used and total come from a single `timeout 2 df` covering **all** targets at
+  once (`--output=target,size,used,avail`, so the extra columns are free),
   not one call per share — otherwise the worst case grew by 2s for every share
   added, and adding shares is the point of the widget.
 - A `df` timeout degrades `free` to `—`. It must never flip `mounted` to false;

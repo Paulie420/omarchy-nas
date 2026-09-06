@@ -283,12 +283,16 @@ Panel {
                 elide: Text.ElideRight
               }
               Text {
-                // "4.5T / 573G" -- capacity then free. Both come from the same
-                // single df call, so the second figure costs nothing extra.
-                // Falls back to an em dash when df timed out, which is a real
-                // state (slow or dying NAS), not an error.
-                text: modelData.free
-                    ? ((modelData.size ? modelData.size + " / " : "") + modelData.free)
+                // "4.0T / 4.5T" -- USED of TOTAL, which reads like a fill
+                // gauge and leaves free implicit. Both figures come from the
+                // one df call, so neither costs anything extra.
+                //
+                // Falls back to an em dash when df timed out. That is a real
+                // state (slow or dying NAS), not an error -- and note `mounted`
+                // never depends on df, so a share stays correctly mounted here
+                // even when its numbers are unavailable.
+                text: (modelData.used && modelData.size)
+                    ? modelData.used + " / " + modelData.size
                     : "—"
                 color: Qt.darker(root.foreground, 1.5)
                 font.family: root.fontFamily
