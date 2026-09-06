@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# omarchy-nas-mountctl — the ENTIRE privileged surface of paulie420.nas.
+# Runs as root via pkexec. Takes a verb and a list of share NAMES; never a
+# path. Source and target are constructed here, so a caller cannot point this
+# at anything outside the export base.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/nas-common.sh"
+
+# CONTROLLER RULING: do NOT honour environment overrides of NAS_HOST,
+# NAS_EXPORT_BASE, or NAS_MOUNT_ROOT here. `man pkexec` confirms pkexec resets
+# to a minimal environment, so the pkexec path is already safe — but nothing
+# stops someone running `sudo -E omarchy-nas-mountctl`, where an inherited
+# NAS_MOUNT_ROOT=/etc would aim a root mount at /etc. Pin all three to their
+# literal values after sourcing lib/nas-common.sh so an inherited environment
+# can never redirect a ROOT mount. The unprivileged status script keeps its
+# overrides; this privileged one must not. Do not "helpfully" restore them.
+NAS_HOST=10.0.0.118
+NAS_EXPORT_BASE=/mnt/SpeakerOffice
+NAS_MOUNT_ROOT=/mnt
+
+die() { printf '%s\n' "$1" >&2; exit 1; }
+
+verb="${1:-}"; shift || true
+[[ $verb == mount || $verb == umount ]] || die "usage: omarchy-nas-mountctl mount|umount <name>..."
+[[ $# -ge 1 ]] || die "no shares given"
+
+# Validate EVERY name before acting on ANY, so a bad argument late in the list
+# cannot leave the system half-changed.
+for n in "$@"; do
+  nas_valid_name "$n" || die "illegal share name: $n"
+done
+
+rc=0
+for n in "$@"; do
+  src=$(nas_source "$n"); tgt=$(nas_target "$n")
+  if [[ ${NAS_DRYRUN:-0} == 1 ]]; then
+    echo "would $verb $src -> $tgt"; continue
+  fi
+  case $verb in
+    mount)
+      findmnt -rn "$tgt" >/dev/null 2>&1 && continue      # already mounted
+      mkdir -p "$tgt" || { echo "mkdir failed: $tgt" >&2; rc=1; continue; }
+      if ! timeout 15 mount -t nfs4 "$src" "$tgt" 2>/dev/null; then
+        echo "mount failed: $n" >&2; rc=1
+      fi
+      ;;
+    umount)
+      findmnt -rn "$tgt" >/dev/null 2>&1 || continue      # already gone
+      # Lazy on fallback: over PiVPN a busy NFS umount hangs rather than fails.
+      if ! timeout 10 umount "$tgt" 2>/dev/null && ! umount -l "$tgt" 2>/dev/null; then
+        echo "umount failed: $n" >&2; rc=1
+      fi
+      ;;
+  esac
+done
+exit $rc
