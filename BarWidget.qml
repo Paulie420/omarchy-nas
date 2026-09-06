@@ -279,14 +279,21 @@ Panel {
                 text: modelData.name
                 color: root.foreground
                 font.family: root.fontFamily
-                width: column.width * 0.4
+                width: column.width * 0.32
                 elide: Text.ElideRight
               }
               Text {
-                text: modelData.free ? modelData.free : "—"
+                // "4.5T / 573G" -- capacity then free. Both come from the same
+                // single df call, so the second figure costs nothing extra.
+                // Falls back to an em dash when df timed out, which is a real
+                // state (slow or dying NAS), not an error.
+                text: modelData.free
+                    ? ((modelData.size ? modelData.size + " / " : "") + modelData.free)
+                    : "—"
                 color: Qt.darker(root.foreground, 1.5)
                 font.family: root.fontFamily
-                width: column.width * 0.2
+                width: column.width * 0.34
+                elide: Text.ElideRight
               }
               Button {
                 // Unmounting over the tunnel is the one destructive-ish action

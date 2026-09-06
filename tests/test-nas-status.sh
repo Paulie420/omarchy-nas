@@ -30,7 +30,11 @@ echo "$out" | jq -e '.shares[]|.free==null or (.free|type=="string" and . != "nu
 # not the string "null". This verifies the unmounted path only, not df behavior.
 TEST_DIR=$(mktemp -d)
 mkdir -p "$TEST_DIR/omarchy/state"
-echo '["extra"]' > "$TEST_DIR/omarchy/state/nas-shares.json"
+# A share name that is valid but can never be mounted. Do NOT use a real share
+# here: this fixture previously named "extra", which was unmounted at the time
+# and later became a genuine mount -- the test then failed because `free` was a
+# real size rather than null. The fixture must not depend on live mount state.
+echo '["zzz-not-a-real-share"]' > "$TEST_DIR/omarchy/state/nas-shares.json"
 test_out=$(XDG_CONFIG_HOME="$TEST_DIR" "$BIN" 2>/dev/null)
 echo "$test_out" | jq -e '.shares[0].free == null' >/dev/null && ok "zero-mounted case produces JSON null" || bad "zero-mounted case produces not JSON null: $(echo "$test_out" | jq -c '[.shares[].free]')"
 rm -rf "$TEST_DIR"
