@@ -29,9 +29,20 @@ Built for a NFS export layout where every share lives under one export base
     │ + extra                        │
     │────────────────────────────────│
     │ [ Mount all ]  [ Open /mnt ]   │
+    │ [ Unmount all ]                │
     └────────────────────────────────┘
 
-The bar icon shows a live mounted count (`4/4`), tinted when some are missing.
+The bar icon is a single glyph, coloured by state:
+
+| Colour | Meaning |
+|---|---|
+| grey  | NAS not reachable — mounting is not even possible |
+| red   | reachable, but **nothing** mounted |
+| amber | reachable, **some** mounted |
+| green | reachable, **all** mounted |
+
+Grey rather than red for unreachable: being away from home is normal, whereas
+"the NAS is right there and nothing is mounted" is the actionable state.
 
 ## Install
 
@@ -102,8 +113,10 @@ a server disappears, which would take the whole status bar down with it. So:
 - A `df` timeout degrades `free` to `—`. It must never flip `mounted` to false;
   those two signals are deliberately decoupled, and there is a test that shims
   `df` with a 30-second hang to prove it.
-- While the panel is closed the widget polls only `findmnt`, so a live bar count
-  costs zero network traffic.
+- With the panel closed the widget runs `omarchy-nas-status --probe` on a 10s
+  timer: `findmnt` plus the single TCP SYN of the reachability test, ~80ms. No
+  `df`, no `showmount`. The full status query — the part that actually talks to
+  the NAS — runs only at startup and while the panel is open.
 
 **The privileged surface is as small as it can be.** `omarchy-nas-mountctl` does
 `mkdir`, `mount` and `umount` and nothing else. It accepts share *names*, never
