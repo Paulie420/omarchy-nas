@@ -21,12 +21,24 @@ Panel {
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
 
+  NasService { id: nas }
+
+  // Poll only while the panel is open: a closed panel must generate no NFS
+  // traffic at all.
+  Timer {
+    interval: Math.max(5, root.setting("refreshIntervalSec", 10)) * 1000
+    running: root.opened
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: nas.refresh()
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰋊"
-    foreground: root.foreground
+    text: nas.totalCount > 0 ? "󰋊 " + nas.mountedCount + "/" + nas.totalCount : "󰋊"
+    foreground: nas.totalCount > 0 && nas.mountedCount < nas.totalCount ? Color.urgent : root.foreground
     useActiveColor: false
     slotSize: Style.bar.statusSlot
     fontSize: Style.bar.iconFont
