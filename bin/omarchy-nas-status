@@ -16,11 +16,28 @@ STATE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/state/nas-shares.json"
 
 # Source of truth for "my shares": the state file. Seeded on first run from
 # whatever is mounted, so an existing setup adopts itself.
-if [[ -r $STATE ]]; then
+#
+# The seed is PERSISTED immediately, and that matters: without it the list is
+# recomputed from the mount table on every run, so unmounting a share would
+# erase it from the widget and leave no way to mount it back. A share list has
+# to outlive the mounts it describes.
+#
+# Only a well-formed JSON array counts as a state file. A hand-edited object or
+# a truncated write falls back to re-seeding rather than producing phantom
+# shares out of its values.
+if [[ -r $STATE ]] && jq -e 'type == "array"' "$STATE" >/dev/null 2>&1; then
   mapfile -t SHARES < <(jq -r '.[]' "$STATE" 2>/dev/null)
 else
   mapfile -t SHARES < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null |
     awk -v b="$NAS_EXPORT_BASE/" '$2 ~ b {sub(".*"b,"",$2); print $2}' | sort -u)
+
+  # Write the seed through a temp file so a crash mid-write cannot leave a
+  # half-written state file that the guard above would then reject.
+  if ((${#SHARES[@]})); then
+    mkdir -p "$(dirname "$STATE")" 2>/dev/null &&
+      printf '%s\n' "${SHARES[@]}" | jq -R . | jq -s . > "$STATE.tmp" 2>/dev/null &&
+      mv "$STATE.tmp" "$STATE" 2>/dev/null || true
+  fi
 fi
 
 # findmnt reads /proc/self/mountinfo — no stat(), so a dead server cannot hang.

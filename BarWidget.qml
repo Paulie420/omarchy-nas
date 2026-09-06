@@ -89,6 +89,11 @@ Panel {
     }
   }
 
+  // One full poll at startup. Without it `nas.totalCount` stays 0 until the
+  // panel is first opened, so the bar icon falls back to a bare glyph and the
+  // whole point of a live count is lost. Costs a single status call at login.
+  Component.onCompleted: nas.refresh()
+
   readonly property int displayMounted: root.opened ? nas.mountedCount : root.cheapMountedCount
 
   BarIconButton {
@@ -127,11 +132,14 @@ Panel {
     return out
   }
 
-  // Unmounting everything over the tunnel carries the same hang risk as one.
-  function confirmOrUmountAll() {
-    if (nas.transport === "pivpn") { confirmDialog.pending = ""; confirmDialog.opened = true }
-    else ctl.umount(root.mountedNames())
-  }
+  // Only unmounting over the tunnel needs a second press. On the LAN an
+  // unmount either works or fails fast, so a confirm there is pure friction.
+  readonly property bool needsConfirm: nas.transport === "pivpn"
+
+  // "" = nothing armed, "*" = the bulk action, otherwise a share name.
+  property string armed: ""
+
+  function arm(what) { root.armed = what; disarmTimer.restart() }
 
   // Names of currently-unmounted shares, for "Mount all".
   function unmountedNames() {
@@ -140,16 +148,16 @@ Panel {
     return out
   }
 
-  // Over PiVPN a busy NFS umount hangs rather than fails, so make it
-  // deliberate: confirm first instead of unmounting straight away.
-  function confirmOrUmount(name) {
-    if (nas.transport === "pivpn") {
-      confirmDialog.pending = name
-      confirmDialog.opened = true
-    } else {
-      ctl.umount([name])
-    }
+  // An armed button disarms itself, so a half-pressed confirm never lingers
+  // into the next time the panel is opened.
+  property Timer disarmTimer: Timer {
+    interval: 4000
+    onTriggered: root.armed = ""
   }
+
+  // Closing the panel always disarms -- reopening should start from a clean
+  // state rather than one press away from unmounting something.
+  onOpenedChanged: if (!root.opened) root.armed = ""
 
   // KeyboardPanel (extends PopupCard) is the content host. Ui/Panel.qml
   // already owns a PanelController -- do NOT declare another. No
@@ -255,16 +263,28 @@ Panel {
                 width: column.width * 0.2
               }
               Button {
-                // A stale mount cannot be unmounted normally -- plain umount
-                // blocks on the dead server -- so offer the lazy path directly.
-                text: modelData.stale ? "Force unmount"
+                // Unmounting over the tunnel is the one destructive-ish action
+                // (a busy NFS umount over PiVPN hangs rather than fails), so it
+                // arms first and acts on the second press. Done INLINE rather
+                // than with Ui/ConfirmDialog: that component fills its parent,
+                // and a bar widget's parent is the tiny bar slot, so it renders
+                // at icon size with hit-testing to match. Confirming in the row
+                // also keeps the pointer where it already is.
+                text: root.armed === modelData.name ? "Confirm?"
+                    : modelData.stale ? "Force unmount"
                     : (modelData.mounted ? "Unmount" : "Mount")
                 enabled: !ctl.busy
                 fontFamily: root.fontFamily
-                foreground: modelData.stale ? root.staleColor : root.foreground
-                onClicked: modelData.stale ? ctl.forceUmount([modelData.name])
-                         : (modelData.mounted ? root.confirmOrUmount(modelData.name)
-                                              : ctl.mount([modelData.name]))
+                foreground: root.armed === modelData.name ? Color.urgent
+                          : modelData.stale ? root.staleColor : root.foreground
+                onClicked: {
+                  if (modelData.stale) { ctl.forceUmount([modelData.name]); return }
+                  if (!modelData.mounted) { ctl.mount([modelData.name]); return }
+                  if (root.needsConfirm) {
+                    if (root.armed === modelData.name) { root.armed = ""; ctl.umount([modelData.name]) }
+                    else root.arm(modelData.name)
+                  } else ctl.umount([modelData.name])
+                }
               }
             }
           }
@@ -334,13 +354,19 @@ Panel {
             Button {
               // One call for every share, so the whole batch costs a single
               // authentication rather than one prompt per share.
-              text: root.staleNames().length > 0 ? "Force unmount all" : "Unmount all"
+              text: root.armed === "*" ? "Confirm — unmount all?"
+                  : root.staleNames().length > 0 ? "Force unmount all" : "Unmount all"
               enabled: !ctl.busy && root.mountedNames().length > 0
               fontFamily: root.fontFamily
-              foreground: root.staleNames().length > 0 ? root.staleColor : root.foreground
-              onClicked: root.staleNames().length > 0
-                       ? ctl.forceUmount(root.mountedNames())
-                       : root.confirmOrUmountAll()
+              foreground: root.armed === "*" ? Color.urgent
+                        : root.staleNames().length > 0 ? root.staleColor : root.foreground
+              onClicked: {
+                if (root.staleNames().length > 0) { ctl.forceUmount(root.mountedNames()); return }
+                if (root.needsConfirm) {
+                  if (root.armed === "*") { root.armed = ""; ctl.umount(root.mountedNames()) }
+                  else root.arm("*")
+                } else ctl.umount(root.mountedNames())
+              }
             }
             Button {
               text: "Open /mnt"
@@ -372,19 +398,5 @@ Panel {
     }
   }
 
-  // Real ConfirmDialog API: `opened` bool, `message`, confirmed()/canceled().
-  // There is no `title`, `open()`, or `onAccepted`.
-  ConfirmDialog {
-    id: confirmDialog
-    property string pending: ""
-    message: "The PiVPN tunnel is carrying this mount. If a transfer is running it will hang rather than fail."
-    confirmText: "Unmount"
-    onConfirmed: {
-      confirmDialog.opened = false
-      // Empty pending means the bulk action; one call, one authentication.
-      if (confirmDialog.pending === "") ctl.umount(root.mountedNames())
-      else ctl.umount([confirmDialog.pending])
-    }
-    onCanceled: confirmDialog.opened = false
-  }
+
 }
