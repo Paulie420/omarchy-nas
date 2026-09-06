@@ -110,6 +110,29 @@ Panel {
     }
   }
 
+  readonly property color staleColor: "#e0a75e"
+
+  // Mounted shares whose server has gone away: mounted, but any read blocks.
+  function staleNames() {
+    var out = []
+    for (var i = 0; i < nas.shares.length; i++)
+      if (nas.shares[i].stale) out.push(nas.shares[i].name)
+    return out
+  }
+
+  function mountedNames() {
+    var out = []
+    for (var i = 0; i < nas.shares.length; i++)
+      if (nas.shares[i].mounted) out.push(nas.shares[i].name)
+    return out
+  }
+
+  // Unmounting everything over the tunnel carries the same hang risk as one.
+  function confirmOrUmountAll() {
+    if (nas.transport === "pivpn") { confirmDialog.pending = ""; confirmDialog.opened = true }
+    else ctl.umount(root.mountedNames())
+  }
+
   // Names of currently-unmounted shares, for "Mount all".
   function unmountedNames() {
     var out = []
@@ -211,8 +234,11 @@ Panel {
               width: column.width
               spacing: Style.space(8)
               Text {
+                // Amber for stale: still in the mount table, but the server is
+                // unreachable, so touching this path blocks. Visually distinct
+                // from both healthy (normal) and simply-absent (hollow).
                 text: modelData.mounted ? "●" : "○"
-                color: root.foreground
+                color: modelData.stale ? root.staleColor : root.foreground
                 font.family: root.fontFamily
               }
               Text {
@@ -229,10 +255,16 @@ Panel {
                 width: column.width * 0.2
               }
               Button {
-                text: modelData.mounted ? "Unmount" : "Mount"
+                // A stale mount cannot be unmounted normally -- plain umount
+                // blocks on the dead server -- so offer the lazy path directly.
+                text: modelData.stale ? "Force unmount"
+                    : (modelData.mounted ? "Unmount" : "Mount")
+                enabled: !ctl.busy
                 fontFamily: root.fontFamily
-                foreground: root.foreground
-                onClicked: modelData.mounted ? root.confirmOrUmount(modelData.name) : ctl.mount([modelData.name])
+                foreground: modelData.stale ? root.staleColor : root.foreground
+                onClicked: modelData.stale ? ctl.forceUmount([modelData.name])
+                         : (modelData.mounted ? root.confirmOrUmount(modelData.name)
+                                              : ctl.mount([modelData.name]))
               }
             }
           }
@@ -279,13 +311,36 @@ Panel {
             foreground: root.foreground
           }
 
+          // Shown only while a polkit prompt is outstanding. Without it a click
+          // looks like it did nothing while the dialog waits for an answer.
+          Text {
+            visible: ctl.busy
+            width: flick.width
+            text: "Waiting for authentication…"
+            color: Qt.darker(root.foreground, 1.3)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           Row {
             spacing: Style.space(8)
             Button {
               text: "Mount all"
+              enabled: !ctl.busy && root.unmountedNames().length > 0
               fontFamily: root.fontFamily
               foreground: root.foreground
               onClicked: ctl.mount(root.unmountedNames())
+            }
+            Button {
+              // One call for every share, so the whole batch costs a single
+              // authentication rather than one prompt per share.
+              text: root.staleNames().length > 0 ? "Force unmount all" : "Unmount all"
+              enabled: !ctl.busy && root.mountedNames().length > 0
+              fontFamily: root.fontFamily
+              foreground: root.staleNames().length > 0 ? root.staleColor : root.foreground
+              onClicked: root.staleNames().length > 0
+                       ? ctl.forceUmount(root.mountedNames())
+                       : root.confirmOrUmountAll()
             }
             Button {
               text: "Open /mnt"
@@ -324,7 +379,12 @@ Panel {
     property string pending: ""
     message: "The PiVPN tunnel is carrying this mount. If a transfer is running it will hang rather than fail."
     confirmText: "Unmount"
-    onConfirmed: { confirmDialog.opened = false; ctl.umount([confirmDialog.pending]) }
+    onConfirmed: {
+      confirmDialog.opened = false
+      // Empty pending means the bulk action; one call, one authentication.
+      if (confirmDialog.pending === "") ctl.umount(root.mountedNames())
+      else ctl.umount([confirmDialog.pending])
+    }
     onCanceled: confirmDialog.opened = false
   }
 }

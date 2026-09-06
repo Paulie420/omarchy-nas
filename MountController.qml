@@ -22,17 +22,29 @@ QtObject {
   readonly property string helperPath: "/usr/local/bin/omarchy-nas-mountctl"
   property string stateFile: (Quickshell.env("HOME") || "") + "/.config/omarchy/state/nas-shares.json"
 
-  function mount(names)  { run("mount", names) }
-  function umount(names) { run("umount", names) }
+  // True from the click until the helper exits. The panel shows this, because
+  // pkexec raises a full-screen polkit dialog and the click otherwise looks
+  // like it did nothing at all while the prompt waits for an answer.
+  property bool busy: proc.running || addProc.running
+
+  function mount(names)       { run("mount", names) }
+  function umount(names)      { run("umount", names) }
+  function forceUmount(names) { run("force-umount", names) }
 
   function run(verb, names) {
     if (!names || names.length === 0 || proc.running) return
     // $0 is the helper path, $1 is the verb, and shifting once leaves "$@"
     // as exactly the share names -- each still a distinct argv element
     // handed straight to exec, never rejoined into a parsed string.
+    // `timeout 150` matters: pkexec blocks until the polkit dialog is answered,
+    // and a dialog that is dismissed or ignored would otherwise leave this
+    // Process running forever. Because run() returns early while proc.running,
+    // ONE wedged authentication silently swallows every later click -- which is
+    // exactly what "I clicked Unmount five times and nothing happened" looks
+    // like. The timeout guarantees the controller always frees itself.
     proc.command = ["bash", "-c",
       'h="$0"; if [ ! -x "$h" ]; then exit 90; fi; ' +
-      'verb="$1"; shift; exec pkexec "$h" "$verb" "$@"',
+      'verb="$1"; shift; exec timeout 150 pkexec "$h" "$verb" "$@"',
       ctl.helperPath, verb].concat(names)
     proc.running = true
   }
@@ -58,6 +70,8 @@ QtObject {
       // prompt is a normal outcome, not an error worth shouting about.
       if (code === 0) ctl.finished(true, "")
       else if (code === 90) ctl.finished(false, "helper not installed — run sudo ./install.sh")
+      // 124 is `timeout` firing: the polkit dialog was never answered.
+      else if (code === 124) ctl.finished(false, "authentication timed out")
       else if (code === 126 || code === 127) ctl.finished(false, "")
       else ctl.finished(false, errCollector.text || "failed")
     }

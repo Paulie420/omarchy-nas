@@ -65,7 +65,7 @@ nas_prepare_target() {
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] || return 0
 
 verb="${1:-}"; shift || true
-[[ $verb == mount || $verb == umount ]] || die "usage: omarchy-nas-mountctl mount|umount <name>..."
+[[ $verb == mount || $verb == umount || $verb == force-umount ]] || die "usage: omarchy-nas-mountctl mount|umount|force-umount <name>..."
 [[ $# -ge 1 ]] || die "no shares given"
 
 # Validate EVERY name before acting on ANY, so a bad argument late in the list
@@ -88,6 +88,17 @@ for n in "$@"; do
         echo "mount failed: $n" >&2; rc=1
       fi
       ;;
+    # Stale mount: the server is gone, so a plain umount would block on the
+    # unreachable NFS server for its full timeout. `umount -l` detaches the
+    # subtree from the namespace immediately WITHOUT waiting on the server,
+    # which is the only thing that reliably clears a hung `hard` NFS mount.
+    force-umount)
+      findmnt -rn "$tgt" >/dev/null 2>&1 || continue
+      if ! umount -l "$tgt" 2>/dev/null; then
+        echo "force-umount failed: $n" >&2; rc=1
+      fi
+      ;;
+
     umount)
       findmnt -rn "$tgt" >/dev/null 2>&1 || continue      # already gone
       # Lazy on fallback: over PiVPN a busy NFS umount hangs rather than fails.

@@ -77,13 +77,19 @@ for n in "${SHARES[@]:-}"; do
   nas_valid_name "$n" || continue
   t=$(nas_target "$n")
   m=${target_mounted[$t]:-false}
+  # STALE: still in the mount table, but the server is gone. Any read of this
+  # path blocks -- these are `hard` NFS mounts, so I/O retries forever rather
+  # than erroring. The panel needs to distinguish "mounted and usable" from
+  # "mounted and will hang your file manager".
+  st=false
+  [[ $m == true && $reachable == false ]] && st=true
   # Emit free space: either the df result (a string) or JSON null if not found.
   if [[ -v target_free["$t"] ]]; then
-    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --arg f "${target_free[$t]}" \
-      '. += [{name:$n,target:$t,mounted:$m,free:$f}]' <<<"$shares_json")
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" --arg f "${target_free[$t]}" \
+      '. += [{name:$n,target:$t,mounted:$m,free:$f,stale:$st}]' <<<"$shares_json")
   else
-    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" \
-      '. += [{name:$n,target:$t,mounted:$m,free:null}]' <<<"$shares_json")
+    shares_json=$(jq -c --arg n "$n" --arg t "$t" --argjson m "$m" --argjson st "$st" \
+      '. += [{name:$n,target:$t,mounted:$m,free:null,stale:$st}]' <<<"$shares_json")
   fi
 done
 
