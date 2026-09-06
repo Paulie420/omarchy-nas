@@ -4,8 +4,19 @@ A NAS bar widget for the [Omarchy](https://omarchy.org) Quattro shell. Shows whi
 NFS shares are mounted, mounts and unmounts them without opening a terminal, and
 lets you add new shares by picking them off the NAS instead of typing paths.
 
-Built for a Synology-style export layout where every share lives under one export
-base (`/mnt/SpeakerOffice/<name>`) and mounts to `/mnt/<name>`.
+Built for a NFS export layout where every share lives under one export base
+(`/mnt/SpeakerOffice/<name>` by default) and mounts to `/mnt/<name>`.
+
+## Requirements
+
+- **Omarchy Quattro** (the Quickshell-based shell). This is a `bar-widget`
+  plugin using the `qs.Ui.Panel` contract; it will not load on the pre-Quattro
+  waybar shell.
+- `nfs-utils` (`showmount`, `mount.nfs4`), `jq`, `findmnt` (util-linux), and a
+  running polkit agent — Omarchy ships `omarchy.polkit`.
+- A fingerprint reader is optional. If `pam_fprintd` is `sufficient` in
+  `/etc/pam.d/polkit-1`, the auth prompt takes a finger; otherwise it takes a
+  password. Nothing here needs configuring either way.
 
 ## What it looks like
 
@@ -68,6 +79,15 @@ write its own settings back. It lives in a state file the plugin owns:
 Seeded on first run from whatever is already mounted, so an existing setup adopts
 itself. Adding a share is an unprivileged write to `$HOME`; only the mount needs
 polkit.
+
+## Two plugins, one machine
+
+Pairs with [omarchy-vpn](https://github.com/Paulie420/omarchy-vpn) when the
+shares live behind a tunnel. The interaction is deliberate and worth knowing if
+you fork this: `pivpn-disconnect.sh` detaches dead mounts **in the background**.
+Running that inline held the VPN widget on "Working…" until the NAS prompt was
+answered, and the tunnel could not be reconnected until it finished. A network
+operation must not block on an interactive filesystem operation.
 
 ## Design notes
 

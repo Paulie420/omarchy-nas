@@ -371,11 +371,19 @@ Panel {
           Row {
             spacing: Style.space(8)
             Button {
-              text: "Mount all"
+              // Bulk actions ALL arm first, mount included. The rule is "a
+              // button that moves more than one share asks once" -- easier to
+              // predict than "destructive ones ask", and it stops a stray click
+              // on a crowded panel from kicking off four mounts over a slow
+              // tunnel. Single-row Mount stays immediate: one share, harmless.
+              text: root.armed === "+" ? "Confirm — mount all?" : "Mount all"
               enabled: !ctl.busy && root.unmountedNames().length > 0
               fontFamily: root.fontFamily
-              foreground: root.foreground
-              onClicked: ctl.mount(root.unmountedNames())
+              foreground: root.armed === "+" ? root.okColor : root.foreground
+              onClicked: {
+                if (root.armed === "+") { root.armed = ""; ctl.mount(root.unmountedNames()) }
+                else root.arm("+")
+              }
             }
             Button {
               // One call for every share, so the whole batch costs a single
