@@ -20,6 +20,8 @@ Panel {
   implicitHeight: button.implicitHeight
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
+  // qs.Commons has Color.urgent but no "ok"/green role, so name one here.
+  readonly property color okColor: "#6fcf82"
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   NasService { id: nas }
@@ -94,7 +96,11 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: nas.totalCount > 0 ? "󰋊 " + root.displayMounted + "/" + nas.totalCount : "󰋊"
-    foreground: nas.totalCount > 0 && root.displayMounted < nas.totalCount ? Color.urgent : root.foreground
+    // Unreachable outranks "some unmounted": if the homelab is gone, the count
+    // is not the interesting fact. Dim rather than urgent-red, because being
+    // away from home is normal, not an error.
+    foreground: !nas.reachable ? Qt.darker(root.foreground, 1.9)
+              : (nas.totalCount > 0 && root.displayMounted < nas.totalCount ? Color.urgent : root.foreground)
     useActiveColor: false
     slotSize: Style.bar.statusSlot
     fontSize: Style.bar.iconFont
@@ -162,10 +168,39 @@ Panel {
           width: flick.width
           spacing: Style.space(8)
 
+          // Connectivity lamp. These shares are only reachable at home or with
+          // PiVPN up, so "can I see the homelab right now" is the first thing
+          // worth knowing when the panel opens -- before any row is read.
+          Row {
+            width: flick.width
+            spacing: Style.space(6)
+
+            Rectangle {
+              width: Style.space(9); height: width; radius: width / 2
+              anchors.verticalCenter: parent.verticalCenter
+              color: nas.reachable ? root.okColor : Color.urgent
+            }
+
+            Text {
+              text: nas.transport === "lan" ? "NAS — via LAN"
+                  : nas.transport === "pivpn" ? "NAS — via PiVPN"
+                  : "NAS — homelab not reachable"
+              color: nas.reachable ? root.foreground : Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          // Only shown when disconnected: says what to actually do about it.
           Text {
-            text: nas.transport === "lan" ? "NAS — via LAN"
-                : nas.transport === "pivpn" ? "NAS — via PiVPN" : "NAS — unreachable"
-            color: root.foreground
+            visible: !nas.reachable
+            width: flick.width
+            wrapMode: Text.WordWrap
+            text: nas.pivpn.up && !nas.pivpn.handshake
+                ? "PiVPN interface is up but the peer has not answered — no handshake."
+                : "Connect to your home network, or bring PiVPN up, to mount these shares."
+            color: Qt.darker(root.foreground, 1.4)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }

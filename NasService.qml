@@ -25,10 +25,10 @@ QtObject {
   function refresh() { if (!proc.running) { svc.busy = true; proc.running = true } }
 
   property Process proc: Process {
-    // Repo path for now: bin/omarchy-nas-status is not yet installed to
-    // /usr/local (that's Task 4, run by a human). Switch this to
-    // /usr/local/bin/omarchy-nas-status once Task 4 lands.
-    command: ["/home/paulie420/.config/omarchy/plugins/paulie420.nas/bin/omarchy-nas-status"]
+    // The INSTALLED helper, not the repo copy: this plugin has to work from
+    // any checkout location, and a hardcoded $HOME path would break for anyone
+    // else. install.sh puts it here; MountController checks for its sibling.
+    command: ["/usr/local/bin/omarchy-nas-status"]
     running: false
     stdout: StdioCollector {
       onStreamFinished: {

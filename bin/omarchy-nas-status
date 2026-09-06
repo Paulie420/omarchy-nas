@@ -92,11 +92,27 @@ done
 
 # showmount can stall when the NAS is gone; an empty list collapses the
 # "Available" section quietly rather than raising an error.
+#
+# Two filters, not one:
+#   1. drop exports already in the share list (nothing to add)
+#   2. drop a NESTED export whose top-level parent is already a share --
+#      newBackupXTB/qbittorrent is reachable through /mnt/newBackupXTB the
+#      moment the parent is mounted, so offering it as a separate mount is
+#      noise. A nested export with no parent in the list is still offered,
+#      because that one genuinely is not reachable any other way.
 avail_json='[]'
 if [[ $reachable == true ]]; then
-  avail_json=$(timeout 6 showmount -e "$NAS_HOST" 2>/dev/null |
+  raw=$(timeout 6 showmount -e "$NAS_HOST" 2>/dev/null |
     awk -v b="$NAS_EXPORT_BASE/" '$1 ~ "^"b {sub("^"b,"",$1); print $1}' |
-    jq -R . | jq -sc "map(select(. as \$x | $(jq -c . <<<"$shares_json") | map(.name) | index(\$x) | not))") || avail_json='[]'
+    jq -R . | jq -sc . 2>/dev/null) || raw='[]'
+  [[ -z $raw || $raw == "null" ]] && raw='[]'
+  avail_json=$(jq -nc --argjson raw "$raw" --argjson shares "$shares_json" '
+    ($shares | map(.name)) as $have
+    | $raw
+    | map(select(. as $x
+        | ($have | index($x) | not)
+        and ($have | index(($x | split("/")[0])) | not)))
+  ' 2>/dev/null) || avail_json='[]'
   [[ -z $avail_json || $avail_json == "null" ]] && avail_json='[]'
 fi
 
