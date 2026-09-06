@@ -25,6 +25,23 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   NasService { id: nas }
+
+  // One poll at startup so the icon reflects reality before the panel has ever
+  // been opened, then poll while the panel is open. REMOVING EITHER LEAVES THE
+  // SERVICE EMPTY: nas.reachable stays false, so the header reads "homelab not
+  // reachable" and every button no-ops because the share list is empty -- the
+  // helper is fine, the widget just never asks it. That regression shipped
+  // once; do not delete these again.
+  Component.onCompleted: nas.refresh()
+
+  Timer {
+    interval: Math.max(5, root.setting("refreshIntervalSec", 10)) * 1000
+    running: root.opened
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: nas.refresh()
+  }
+
   MountController {
     id: ctl
     onFinished: function (ok, message) { nas.lastError = ok ? "" : message; nas.refresh() }
