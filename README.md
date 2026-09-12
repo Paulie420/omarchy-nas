@@ -51,17 +51,42 @@ Grey rather than red for unreachable: being away from home is normal, whereas
     sudo ./install.sh
     omarchy plugin enable paulie420.nas right
 
-`install.sh` puts two helpers on the system and registers a polkit action:
+`install.sh` puts these on the system, registers a polkit action, and enables
+a systemd service:
 
 | Path | Purpose |
 |---|---|
 | `/usr/local/lib/omarchy-nas/nas-common.sh` | shared path derivation |
 | `/usr/local/bin/omarchy-nas-status` | unprivileged; prints state as JSON |
 | `/usr/local/bin/omarchy-nas-mountctl` | root via pkexec; mounts only |
+| `/usr/local/bin/omarchy-nas-shutdown-unmount` | root via systemd; umounts only |
 | `/usr/share/polkit-1/actions/org.omarchy.nas.policy` | the auth action |
+| `/etc/systemd/system/nas-unmount.service` | runs the shutdown-unmount helper |
 
 Remove it all with `sudo ./install.sh --uninstall` (this does **not** unmount
-anything).
+anything right now — it only removes the automatic unmount-at-shutdown).
+
+## Unmounting cleanly at shutdown
+
+NFS/CIFS mounts can hang a shutdown or reboot for a minute or more if the
+server has already gone away — the kernel's generic filesystem-unmount pass
+waits on it. `nas-unmount.service` fixes this by force-unmounting every
+mounted NFS/CIFS share (`umount -l`, via `omarchy-nas-shutdown-unmount`)
+*before* that generic pass runs, using the standard "run something on
+shutdown" systemd idiom: a unit that's active from boot and declares
+`Conflicts=`/`Before=shutdown.target`, so stopping it — which runs its
+`ExecStop` — is forced as part of *reaching* `shutdown.target`.
+
+`shutdown.target` is the one synchronization point `poweroff.target`,
+`reboot.target`, `halt.target`, and `kexec.target` all pull in, so this fires
+the same way for `systemctl poweroff`/`reboot`, the GUI shutdown menu, and
+`shutdown` — including `sudo shutdown now`, which on a systemd machine is
+itself a systemd shutdown request, not a separate code path. No fstab entries
+or specific share names are involved: it force-unmounts *whatever* is mounted
+with type `nfs`, `nfs4`, `cifs`, or `smb3` at the time, so it needs no
+maintenance as shares are added or removed. Installed and enabled
+automatically by `install.sh`; see its closing output for how to test it
+without actually shutting down.
 
 ## Authentication
 
@@ -138,26 +163,30 @@ confirmation and uses a lazy unmount.
 
 ## Layout
 
-    lib/nas-common.sh          name validation + path derivation (shared)
-    bin/omarchy-nas-status     unprivileged state reader -> JSON
-    bin/omarchy-nas-mountctl   the entire root surface
-    polkit/                    the polkit action
-    manifest.json              plugin metadata
-    BarWidget.qml              bar icon + panel
-    NasService.qml             polls the status helper
-    MountController.qml        dispatches mount/unmount/add
-    tests/                     shell test suites
-    docs/design.md             why it is built this way
+    lib/nas-common.sh                  name validation + path derivation (shared)
+    bin/omarchy-nas-status             unprivileged state reader -> JSON
+    bin/omarchy-nas-mountctl           the entire root mount/unmount surface
+    bin/omarchy-nas-shutdown-unmount   root; force-umounts at shutdown
+    polkit/                            the polkit action
+    systemd/nas-unmount.service        runs the above during shutdown
+    manifest.json                      plugin metadata
+    BarWidget.qml                      bar icon + panel
+    NasService.qml                     polls the status helper
+    MountController.qml                dispatches mount/unmount/add
+    tests/                             shell test suites
+    docs/design.md                     why it is built this way
 
 ## Tests
 
     bash tests/test-nas-common.sh
     bash tests/test-nas-status.sh
     bash tests/test-nas-mountctl.sh
+    bash tests/test-nas-shutdown-unmount.sh
 
-`install.sh` refuses to install if the mountctl suite fails — that suite is what
-proves the root helper rejects malformed names, and it should not be granted a
-polkit action while red.
+`install.sh` refuses to install if the mountctl or shutdown-unmount suites
+fail — those are what prove the root helpers behave (reject malformed names;
+only ever issue `umount -l` against findmnt's own list), and neither should be
+granted root while red.
 
 ## License
 

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# bin/omarchy-nas-shutdown-unmount — force-unmount every NFS/CIFS mount before
+# shutdown/reboot/poweroff. Invoked by systemd (nas-unmount.service's
+# ExecStop) as root, with no terminal and nothing guaranteed to still be
+# running afterward. It must never block: a `hard` NFS mount whose server is
+# already gone is exactly what turns systemd's generic filesystem-unmount
+# step into the ~90s "A stop job is running" hang this exists to prevent.
+set -uo pipefail
+
+# findmnt reads /proc/self/mountinfo -- no stat(), so a dead server cannot
+# hang this enumeration the way `mountpoint` or a bare `mount` listing would.
+list_targets() {
+  findmnt -rn -t nfs,nfs4,cifs,smb3 -o TARGET 2>/dev/null
+}
+
+unmount_one() {
+  local t=$1
+  if [[ ${NAS_DRYRUN:-0} == 1 ]]; then
+    echo "would umount -l $t"
+    return 0
+  fi
+  # Lazy: detaches the mount from the namespace immediately without waiting
+  # on the (possibly already-unreachable) server. A plain umount here is
+  # exactly the hang this script exists to prevent.
+  umount -l "$t" 2>&1
+}
+
+# Guarded so the test suite can source this file (to exercise list_targets()
+# and unmount_one() directly) without it consuming the test script's
+# arguments or running the loop below. Same pattern as bin/omarchy-nas-mountctl.
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] || return 0
+
+count=0
+while IFS= read -r target; do
+  [[ -n $target ]] || continue
+  logger -t nas-shutdown-unmount "unmounting $target"
+  unmount_one "$target" | while IFS= read -r line; do logger -t nas-shutdown-unmount "$line"; done
+  count=$((count + 1))
+done < <(list_targets)
+
+logger -t nas-shutdown-unmount "done ($count mount(s))"
+exit 0

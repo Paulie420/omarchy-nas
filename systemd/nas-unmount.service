@@ -1,0 +1,31 @@
+# nas-unmount.service — force-unmount NAS shares during the shutdown
+# transaction, before systemd's generic filesystem-unmount phase gets a
+# chance to hang on a dead NFS/CIFS server.
+#
+# This is the standard "run something on shutdown" idiom: the unit sits idle
+# (RemainAfterExit=yes; ExecStart does nothing) from boot onward, so it is
+# ACTIVE by the time a shutdown is requested. Conflicts=+Before=shutdown.target
+# then forces systemd to stop it -- running ExecStop -- as part of *reaching*
+# shutdown.target, and finish before that target is considered reached.
+#
+# shutdown.target is the one synchronization point that poweroff.target,
+# reboot.target, halt.target and kexec.target all depend on, so this fires
+# uniformly for `systemctl poweroff/reboot`, the GUI shutdown menu, and
+# `shutdown` (including `sudo shutdown now`, which on a systemd machine is
+# itself implemented as a systemd shutdown request) -- there is no separate
+# path any of those take that skips shutdown.target.
+[Unit]
+Description=Force-unmount NAS shares before shutdown/reboot
+Documentation=https://github.com/Paulie420/omarchy-nas
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/bin/omarchy-nas-shutdown-unmount
+
+[Install]
+WantedBy=multi-user.target
