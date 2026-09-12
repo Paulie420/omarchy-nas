@@ -9,6 +9,9 @@ QtObject {
 
   property bool   reachable: false
   property string transport: "none"
+  // Never null: BarWidget reads pivpn.up/.handshake directly on the paint path,
+  // and an undefined here throws before the first status blob ever lands.
+  property var    pivpn: ({ up: false, handshake: false })
   property var    shares: []
   property var    available: []
   property bool   busy: false
@@ -37,6 +40,7 @@ QtObject {
           var d = JSON.parse(this.text)
           svc.reachable = !!d.reachable
           svc.transport = d.transport || "none"
+          svc.pivpn     = d.pivpn || { up: false, handshake: false }
           svc.shares    = d.shares || []
           svc.available = d.available || []
           svc.lastError = ""
