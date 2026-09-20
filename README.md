@@ -46,7 +46,7 @@ Grey rather than red for unreachable: being away from home is normal, whereas
 
 ## Install
 
-    git clone <this repo> ~/.config/omarchy/plugins/paulie420.nas
+    git clone https://github.com/Paulie420/omarchy-nas.git ~/.config/omarchy/plugins/paulie420.nas
     cd ~/.config/omarchy/plugins/paulie420.nas
     sudo ./install.sh
     omarchy plugin enable paulie420.nas right
@@ -187,6 +187,12 @@ confirmation and uses a lazy unmount.
 fail — those are what prove the root helpers behave (reject malformed names;
 only ever issue `umount -l` against findmnt's own list), and neither should be
 granted root while red.
+
+## Who made this
+
+I'm paulie420. I run a homelab, a BBS, and [techheart.life](https://techheart.life),
+and I put the builds and the debugging up on YouTube at
+**[@techheart6090](https://youtube.com/@techheart6090)**.
 
 ## License
 
