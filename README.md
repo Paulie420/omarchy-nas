@@ -20,17 +20,9 @@ Built for a NFS export layout where every share lives under one export base
 
 ## What it looks like
 
-    ┌─ NAS ──────────────── via LAN ─┐
-    │ ● Backup4TB  4.0T / 4.5T  [⏏]  │
-    │ ● Backup6TB  5.1T / 5.5T  [⏏]  │
-    │ ○ newBackupXTB      —     [↑]  │
-    │── Available on NAS ────────────│
-    │ + TimeMachine                  │
-    │ + extra                        │
-    │────────────────────────────────│
-    │ [ Mount all ]  [ Open /mnt ]   │
-    │ [ Unmount all ]                │
-    └────────────────────────────────┘
+![Nothing mounted — red icon, every share offers Mount](preview-none.png)
+![Some shares mounted — amber icon, Mount and Unmount side by side](preview-some.png)
+![Everything mounted — green icon, every share shows used/total space](preview-all.png)
 
 The bar icon is a single glyph, coloured by state:
 
